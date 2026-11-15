@@ -1,0 +1,26 @@
+{
+  "id": "./",
+  "name": "Web Dashers",
+  "short_name": "Web Dashers",
+  "description": "Web Dashers - installable browser game with offline cache for local game files.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#101010",
+  "theme_color": "#C1FB3D",
+  "icons": [
+    {
+      "src": "./wd_branding/icons/icon_512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./wd_branding/icons/icon_256x256.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

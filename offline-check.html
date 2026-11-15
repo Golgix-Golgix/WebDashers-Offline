@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#C1FB3D">
+<title>Web Dashers - Verifica offline</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #101010; color: #f3f3f3; }
+  main { width: min(680px, calc(100% - 32px)); box-sizing: border-box; background: #1e1e1e; border: 1px solid #444; border-radius: 18px; padding: 24px; }
+  h1 { margin-top: 0; } p { line-height: 1.5; color: #d0d0d0; }
+  progress { width: 100%; height: 18px; }
+  #status { font-weight: 700; font-size: 1.1rem; }
+  .muted { font-size: .9rem; color: #aaa; }
+  .ok { color: #8be28b; } .warn { color: #ffd36d; } .bad { color: #ff8989; }
+  a { color: #c1fb3d; }
+  code { overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Web Dashers · Verifica offline</h1>
+  <p>Questa pagina controlla che Chrome abbia conservato sul Chromebook tutti i file locali del gioco.</p>
+  <div id="status">Controllo del Service Worker…</div>
+  <progress id="bar" max="1" value="0"></progress>
+  <p id="detail" class="muted">Non chiudere la pagina durante il primo scaricamento.</p>
+  <p id="storage" class="muted"></p>
+  <p class="muted"><a href="./">Torna a Web Dashers</a></p>
+</main>
+<script>
+(() => {
+  const CACHE_NAME = 'webdashers-pages-offline-2026-11-15-1';
+  const root = new URL('./', location.href);
+  const status = document.getElementById('status');
+  const detail = document.getElementById('detail');
+  const bar = document.getElementById('bar');
+  const storage = document.getElementById('storage');
+
+  function show(text, cls) {
+    status.textContent = text;
+    status.className = cls || '';
+  }
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      const data = event.data || {};
+      if (data.type !== 'WEBDASHERS_OFFLINE_PROGRESS') return;
+      if (data.total) {
+        bar.max = data.total;
+        bar.value = data.done || 0;
+      }
+      if (data.phase === 'complete') {
+        show('Preparazione offline completata', 'ok');
+        detail.textContent = 'Tutti i file locali sono stati scaricati. Esegui il test scollegando il Wi-Fi e riaprendo il gioco.';
+      } else if (data.phase === 'cache') {
+        show('Scaricamento risorse offline…');
+        detail.textContent = (data.done || 0) + ' di ' + data.total + ' file: ' + (data.detail || '');
+      }
+    });
+  }
+
+  async function checkStorage() {
+    try {
+      if (!navigator.storage) return;
+      const estimate = await navigator.storage.estimate();
+      const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
+      const used = (estimate.usage || 0) / 1024 / 1024;
+      const quota = (estimate.quota || 0) / 1024 / 1024;
+      storage.textContent = 'Spazio origine: ' + used.toFixed(1) + ' MiB usati / ' + (quota ? quota.toFixed(1) + ' MiB disponibili come quota' : 'quota non comunicata') + '. Conservazione persistente: ' + (persisted ? 'concessa' : 'non confermata dal browser') + '.';
+    } catch (_) {
+      storage.textContent = 'Il browser non ha fornito i dettagli dello spazio di archiviazione.';
+    }
+  }
+
+  async function verifyCache() {
+    const manifestUrl = new URL('offline-assets.json', root).href;
+    const cache = await caches.open(CACHE_NAME);
+    const response = await cache.match(manifestUrl);
+    if (!response) {
+      show('Cache non ancora pronta', 'warn');
+      detail.textContent = 'Rimani online e ricarica questa pagina. Se il problema continua, controlla che la pubblicazione GitHub Pages sia terminata.';
+      return;
+    }
+    const manifest = await response.json();
+    const files = manifest.files || [];
+    let present = 0;
+    const missing = [];
+    for (const path of files) {
+      const url = new URL(path, root).href;
+      const hit = await cache.match(url, { ignoreSearch: true });
+      if (hit) present++;
+      else missing.push(path);
+      bar.max = files.length;
+      bar.value = present;
+    }
+    await checkStorage();
+    if (missing.length === 0) {
+      show('PRONTO PER L’USO OFFLINE', 'ok');
+      detail.textContent = present + ' di ' + files.length + ' file presenti nella cache. Ora puoi chiudere la connessione e provare il gioco.';
+    } else {
+      show('Cache incompleta: ' + missing.length + ' file mancanti', 'warn');
+      detail.textContent = 'Ricarica questa pagina con Internet attivo. Primo file mancante: ' + missing[0];
+    }
+  }
+
+  async function start() {
+    await checkStorage();
+    if (!('serviceWorker' in navigator)) {
+      show('Service Worker non supportato da questo browser', 'bad');
+      return;
+    }
+    try {
+      const registration = await navigator.serviceWorker.register(new URL('service-worker.js', root).href, { scope: root.pathname });
+      const installingWorker = registration.installing;
+      if (installingWorker) {
+        show('Preparazione offline in corso…', 'warn');
+        detail.textContent = 'Il browser sta scaricando tutti i file del gioco. Mantieni Internet attivo.';
+        installingWorker.addEventListener('statechange', () => {
+          if (installingWorker.state === 'redundant') {
+            show('Installazione della cache non riuscita', 'bad');
+            detail.textContent = 'Controlla lo spazio libero, la pubblicazione GitHub Pages e i file mancanti, poi ricarica mentre sei online.';
+          } else if (installingWorker.state === 'activated') {
+            verifyCache().catch((err) => {
+              show('Verifica non riuscita', 'bad');
+              detail.textContent = String(err);
+            });
+          }
+        });
+      }
+      if (registration.active) await verifyCache();
+      else {
+        navigator.serviceWorker.ready.then(() => verifyCache()).catch((err) => {
+          show('Service Worker non pronto', 'bad');
+          detail.textContent = String(err);
+        });
+      }
+    } catch (err) {
+      show('Impossibile installare il Service Worker', 'bad');
+      detail.textContent = String(err);
+    }
+  }
+  start();
+})();
+</script>
+</body>
+</html>
