@@ -38,7 +38,8 @@ jobs:
             "${ASSET_URL}"
 
           echo "708fffc85244d1ef7b8f1b8356299cf5ca5a9ed8b1656686b74b4530e6b22a4e  ${RUNNER_TEMP}/WebDashers_Offline_Updated.zip" | sha256sum --check --status
-          mkdir -p "${RUNNER_TEMP}/extracted" public
+          PUBLIC_DIR="${GITHUB_WORKSPACE}/public"
+mkdir -p "${RUNNER_TEMP}/extracted" "${PUBLIC_DIR}"
           unzip -q "${RUNNER_TEMP}/WebDashers_Offline_Updated.zip" -d "${RUNNER_TEMP}/extracted"
           SOURCE_DIR="${RUNNER_TEMP}/extracted/web-dashers.github.io-main"
           test -f "${SOURCE_DIR}/index.html"
@@ -80,9 +81,9 @@ jobs:
           print(f'Validated Dash: {len(objects)} objects; Swing skins: 43; offline files: {len(files)}.')
           PY
 
-          cp -a "${SOURCE_DIR}/." public/
-          test -f public/index.html
-          test -f public/offline-check.html
+          cp -a "${SOURCE_DIR}/." "${PUBLIC_DIR}/"
+test -f "${PUBLIC_DIR}/index.html"
+test -f "${PUBLIC_DIR}/offline-check.html"
           echo "Corrected Web Dashers v2 package verified."
 
       - name: Configure GitHub Pages
