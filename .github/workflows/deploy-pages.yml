@@ -1,7 +1,11 @@
-
 name: Deploy Web Dashers Offline to GitHub Pages
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/deploy-pages.yml'
   release:
     types: [published]
   workflow_dispatch:
@@ -22,7 +26,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Download and verify the exact offline release
+      - name: Download the exact corrected v2 release asset
         env:
           REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ github.event.release.tag_name || 'offline-2026-11-21-v2' }}
@@ -32,6 +36,8 @@ jobs:
           curl --fail --location --retry 4 --retry-delay 2 \
             --output "${RUNNER_TEMP}/WebDashers_Offline_Updated.zip" \
             "${ASSET_URL}"
+
+          echo "708fffc85244d1ef7b8f1b8356299cf5ca5a9ed8b1656686b74b4530e6b22a4e  ${RUNNER_TEMP}/WebDashers_Offline_Updated.zip" | sha256sum --check --status
           mkdir -p "${RUNNER_TEMP}/extracted" public
           unzip -q "${RUNNER_TEMP}/WebDashers_Offline_Updated.zip" -d "${RUNNER_TEMP}/extracted"
           SOURCE_DIR="${RUNNER_TEMP}/extracted/web-dashers.github.io-main"
@@ -39,21 +45,54 @@ jobs:
           test -f "${SOURCE_DIR}/service-worker.js"
           test -f "${SOURCE_DIR}/offline-assets.json"
           test -f "${SOURCE_DIR}/offline-check.html"
+          test -f "${SOURCE_DIR}/assets/levels/22.txt"
           grep -Fq '2026-11-21-2' "${SOURCE_DIR}/service-worker.js"
           grep -Fq '"version": "2026-11-21.2"' "${SOURCE_DIR}/offline-assets.json"
           grep -Fq '"cacheName": "webdashers-pages-offline-2026-11-21-2"' "${SOURCE_DIR}/offline-assets.json"
+          grep -Fq 'replace(/\0+$/g' "${SOURCE_DIR}/assets/scripts/core/level.js"
+
+          cd "${SOURCE_DIR}"
+          python3 - <<'PY'
+          import base64, gzip, json
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          root = Path('.')
+          m = json.loads((root/'offline-assets.json').read_text(encoding='utf-8'))
+          assert m.get('version') == '2026-11-21.2', m.get('version')
+          assert m.get('cacheName') == 'webdashers-pages-offline-2026-11-21-2'
+          files = m.get('files', [])
+          assert len(files) == 363, len(files)
+          assert len(set(files)) == len(files), 'Duplicate paths in offline manifest'
+          assert all((root/p).is_file() for p in files), 'Offline manifest has missing files'
+          raw = (root/'assets/levels/22.txt').read_text(encoding='utf-8').rstrip('\0').strip()
+          raw += '=' * ((4-len(raw)%4)%4)
+          decoded = gzip.decompress(base64.urlsafe_b64decode(raw)).decode('utf-8')
+          objects = [part for part in decoded.split(';')[1:] if part]
+          assert len(objects) == 18329, len(objects)
+          swing_png = [p for p in files if p.startswith('assets/icons/swing_') and p.endswith('.png')]
+          swing_plist = [p for p in files if p.startswith('assets/icons/swing_') and p.endswith('.plist')]
+          assert len(swing_png) == 43 and len(swing_plist) == 43
+          suffixes = ['_001.png', '_glow_001.png', '_2_001.png', '_extra_001.png']
+          for i in range(1,44):
+              base = f'swing_{i:02d}'
+              keys = [e.text for e in ET.parse(root/'assets/icons'/f'{base}-hd.plist').getroot().iter('key') if e.text]
+              assert all(base+s in keys for s in suffixes), base
+          print(f'Validated Dash: {len(objects)} objects; Swing skins: 43; offline files: {len(files)}.')
+          PY
+
           cp -a "${SOURCE_DIR}/." public/
-          touch public/.nojekyll
           test -f public/index.html
           test -f public/offline-check.html
-          echo "Verified Web Dashers offline build ${RELEASE_TAG}."
+          echo "Corrected Web Dashers v2 package verified."
+
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
+
       - name: Upload the site artifact
         uses: actions/upload-pages-artifact@v4
         with:
           path: public
-          include-hidden-files: true
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
