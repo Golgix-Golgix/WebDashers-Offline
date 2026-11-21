@@ -26,33 +26,61 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
-      - name: Download the latest offline bundle from this repository's Releases
+      - name: Download the exact offline release
         env:
           REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || 'offline-2026-11-21' }}
         run: |
           set -euo pipefail
-          ASSET_URL="https://github.com/${REPOSITORY}/releases/latest/download/WebDashers_Offline_Updated.zip"
+
+          ASSET_URL="https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}/WebDashers_Offline_Updated.zip"
+
           curl --fail --location --retry 4 --retry-delay 2 \
             --output "${RUNNER_TEMP}/WebDashers_Offline_Updated.zip" \
             "${ASSET_URL}"
+
           mkdir -p "${RUNNER_TEMP}/extracted" public
-          unzip -q "${RUNNER_TEMP}/WebDashers_Offline_Updated.zip" -d "${RUNNER_TEMP}/extracted"
+
+          unzip -q "${RUNNER_TEMP}/WebDashers_Offline_Updated.zip" \
+            -d "${RUNNER_TEMP}/extracted"
+
           SOURCE_DIR="${RUNNER_TEMP}/extracted/web-dashers.github.io-main"
+
           test -f "${SOURCE_DIR}/index.html"
           test -f "${SOURCE_DIR}/service-worker.js"
           test -f "${SOURCE_DIR}/offline-assets.json"
+          test -f "${SOURCE_DIR}/offline-check.html"
+
+          if ! grep -Fq "2026-11-20-1" "${SOURCE_DIR}/service-worker.js"; then
+            echo "ERROR: Wrong Service Worker version!"
+            exit 1
+          fi
+
+          if ! grep -Fq "2026-11-20.1" "${SOURCE_DIR}/offline-assets.json"; then
+            echo "ERROR: Wrong offline manifest version!"
+            exit 1
+          fi
+
           cp -a "${SOURCE_DIR}/." public/
+
           touch public/.nojekyll
+
           test -f public/index.html
           test -f public/offline-check.html
+
+          echo "Correct offline release verified."
+
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
+
       - name: Upload the site artifact
         uses: actions/upload-pages-artifact@v4
         with:
           path: public
           include-hidden-files: true
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
