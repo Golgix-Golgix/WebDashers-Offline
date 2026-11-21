@@ -1,0 +1,58 @@
+
+name: Deploy Web Dashers Offline to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/deploy-pages.yml'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download the latest offline bundle from this repository's Releases
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ASSET_URL="https://github.com/${REPOSITORY}/releases/latest/download/WebDashers_Offline_Updated.zip"
+          curl --fail --location --retry 4 --retry-delay 2 \
+            --output "${RUNNER_TEMP}/WebDashers_Offline_Updated.zip" \
+            "${ASSET_URL}"
+          mkdir -p "${RUNNER_TEMP}/extracted" public
+          unzip -q "${RUNNER_TEMP}/WebDashers_Offline_Updated.zip" -d "${RUNNER_TEMP}/extracted"
+          SOURCE_DIR="${RUNNER_TEMP}/extracted/web-dashers.github.io-main"
+          test -f "${SOURCE_DIR}/index.html"
+          test -f "${SOURCE_DIR}/service-worker.js"
+          test -f "${SOURCE_DIR}/offline-assets.json"
+          cp -a "${SOURCE_DIR}/." public/
+          touch public/.nojekyll
+          test -f public/index.html
+          test -f public/offline-check.html
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Upload the site artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: public
+          include-hidden-files: true
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
