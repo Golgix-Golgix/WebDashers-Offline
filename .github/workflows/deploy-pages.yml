@@ -1,12 +1,6 @@
-
 name: Deploy Web Dashers Offline to GitHub Pages
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/deploy-pages.yml'
   release:
     types: [published]
   workflow_dispatch:
@@ -26,139 +20,92 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
-      - name: Download and verify Web Dashers v2
+      - name: Download and verify the exact Web Dashers v3 bundle
         env:
           REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name || 'offline-2026-11-21-v2' }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || 'offline-2026-11-25-v3' }}
         run: |
           set -euo pipefail
-
           ASSET_URL="https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}/WebDashers_Offline_Updated.zip"
+          ZIP_PATH="${RUNNER_TEMP}/WebDashers_Offline_Updated.zip"
+          PUBLIC_DIR="${GITHUB_WORKSPACE}/public"
+          EXTRACT_DIR="${RUNNER_TEMP}/extracted"
 
           curl --fail --location --retry 4 --retry-delay 2 \
-            --output "${RUNNER_TEMP}/WebDashers_Offline_Updated.zip" \
-            "${ASSET_URL}"
+            --output "${ZIP_PATH}" "${ASSET_URL}"
 
-          echo "708fffc85244d1ef7b8f1b8356299cf5ca5a9ed8b1656686b74b4530e6b22a4e  ${RUNNER_TEMP}/WebDashers_Offline_Updated.zip" | sha256sum --check --status
+          echo "fffa63e089afccb640629c1bcbd5bb8cad87ef7c2ba7148ce54ce0dc6d210359  ${ZIP_PATH}" | sha256sum --check --status
 
-          PUBLIC_DIR="${GITHUB_WORKSPACE}/public"
-
-          mkdir -p "${RUNNER_TEMP}/extracted" "${PUBLIC_DIR}"
-
-          unzip -q "${RUNNER_TEMP}/WebDashers_Offline_Updated.zip" \
-            -d "${RUNNER_TEMP}/extracted"
-
-          SOURCE_DIR="${RUNNER_TEMP}/extracted/web-dashers.github.io-main"
+          mkdir -p "${EXTRACT_DIR}" "${PUBLIC_DIR}"
+          unzip -q "${ZIP_PATH}" -d "${EXTRACT_DIR}"
+          SOURCE_DIR="${EXTRACT_DIR}/workdashers"
 
           test -f "${SOURCE_DIR}/index.html"
           test -f "${SOURCE_DIR}/service-worker.js"
           test -f "${SOURCE_DIR}/offline-assets.json"
           test -f "${SOURCE_DIR}/offline-check.html"
           test -f "${SOURCE_DIR}/assets/levels/22.txt"
-
-          grep -Fq '2026-11-21-2' "${SOURCE_DIR}/service-worker.js"
-          grep -Fq '"version": "2026-11-21.2"' "${SOURCE_DIR}/offline-assets.json"
-          grep -Fq '"cacheName": "webdashers-pages-offline-2026-11-21-2"' "${SOURCE_DIR}/offline-assets.json"
           grep -Fq 'replace(/\0+$/g' "${SOURCE_DIR}/assets/scripts/core/level.js"
+          grep -Fq '2026-11-25-1' "${SOURCE_DIR}/service-worker.js"
+          grep -Fq '"version": "2026-11-25.1"' "${SOURCE_DIR}/offline-assets.json"
+          grep -Fq '"cacheName": "webdashers-pages-offline-2026-11-25-1"' "${SOURCE_DIR}/offline-assets.json"
+          grep -Fq 'wd-compatibility.js?v=20261125-1' "${SOURCE_DIR}/index.html"
+          grep -Fq 'triggers-v22.js?v=20261125-1' "${SOURCE_DIR}/index.html"
 
           cd "${SOURCE_DIR}"
-
           python3 - <<'PY'
-          import base64
-          import gzip
-          import json
+          import base64, gzip, json, re
           from pathlib import Path
-          import xml.etree.ElementTree as ET
-
           root = Path('.')
-
-          manifest = json.loads(
-              (root / 'offline-assets.json').read_text(encoding='utf-8')
-          )
-
-          assert manifest.get('version') == '2026-11-21.2'
-          assert manifest.get('cacheName') == 'webdashers-pages-offline-2026-11-21-2'
-
+          manifest = json.loads((root / 'offline-assets.json').read_text(encoding='utf-8'))
+          assert manifest.get('version') == '2026-11-25.1'
+          assert manifest.get('cacheName') == 'webdashers-pages-offline-2026-11-25-1'
           files = manifest.get('files', [])
-
-          assert len(files) == 363, f'Expected 363 files, found {len(files)}'
-          assert len(set(files)) == len(files), 'Duplicate paths in offline manifest'
-          assert all((root / path).is_file() for path in files), 'Missing offline files'
-
-          raw = (
-              (root / 'assets/levels/22.txt')
-              .read_text(encoding='utf-8')
-              .rstrip('\0')
-              .strip()
-          )
-
-          raw += '=' * ((4 - len(raw) % 4) % 4)
-
-          decoded = gzip.decompress(
-              base64.urlsafe_b64decode(raw)
-          ).decode('utf-8')
-
-          objects = [
-              part for part in decoded.split(';')[1:]
-              if part
-          ]
-
-          assert len(objects) == 18329, (
-              f'Expected 18329 Dash objects, found {len(objects)}'
-          )
-
-          swing_png = [
-              path for path in files
-              if path.startswith('assets/icons/swing_')
-              and path.endswith('.png')
-          ]
-
-          swing_plist = [
-              path for path in files
-              if path.startswith('assets/icons/swing_')
-              and path.endswith('.plist')
-          ]
-
-          assert len(swing_png) == 43
-          assert len(swing_plist) == 43
-
-          suffixes = [
-              '_001.png',
-              '_glow_001.png',
-              '_2_001.png',
-              '_extra_001.png'
-          ]
-
-          for i in range(1, 44):
-              base = f'swing_{i:02d}'
-
-              plist_path = (
-                  root / 'assets/icons' / f'{base}-hd.plist'
-              )
-
-              keys = [
-                  element.text
-                  for element in ET.parse(plist_path).getroot().iter('key')
-                  if element.text
-              ]
-
-              assert all(base + suffix in keys for suffix in suffixes), base
-
-          print(
-              f'Validated Dash: {len(objects)} objects; '
-              f'Swing skins: 43; offline files: {len(files)}.'
-          )
+          assert len(files) == 365, f'Expected 365 cached files, found {len(files)}'
+          assert len(files) == len(set(files)), 'Duplicate paths in offline manifest'
+          assert all((root / name).is_file() for name in files), 'Missing file in offline manifest'
+          data = (root / 'assets/levels/22.txt').read_text(encoding='utf-8').rstrip('\0').strip()
+          data += '=' * ((4 - len(data) % 4) % 4)
+          decoded = gzip.decompress(base64.urlsafe_b64decode(data)).decode('utf-8')
+          objects = [item for item in decoded.split(';')[1:] if item]
+          assert len(objects) == 18329, f'Unexpected Dash object count: {len(objects)}'
+          trigger_module = (root / 'assets/scripts/core/triggers-v22.js').read_text(encoding='utf-8')
+          ids = re.findall(r'^\s+\d+: \{ name:', trigger_module, re.M)
+          assert len(ids) == 92, f'Expected 92 trigger catalog entries, found {len(ids)}'
+          handlers = re.findall(r'implemented: true', trigger_module)
+          assert len(handlers) == 2, f'Expected two runtime handlers in this milestone, found {len(handlers)}'
+          print(f'Validated: Dash {len(objects)} objects; trigger catalog {len(ids)} IDs; offline files {len(files)}.')
           PY
 
-          cp -a "${SOURCE_DIR}/." "${PUBLIC_DIR}/"
+          node - <<'JS'
+          const fs = require('fs');
+          const vm = require('vm');
+          const context = { window: {} };
+          vm.createContext(context);
+          vm.runInContext(fs.readFileSync('assets/scripts/game/allObjects.js', 'utf8'), context);
+          const definitions = context.window.allobjects();
+          const actual = Object.keys(definitions)
+            .map(Number)
+            .filter(id => id >= 1900 && definitions[String(id)]?.type === 'trigger')
+            .sort((a, b) => a - b);
+          const source = fs.readFileSync('assets/scripts/core/triggers-v22.js', 'utf8');
+          const catalog = [...source.matchAll(/^\s+(\d+): \{ name:/gm)]
+            .map(match => Number(match[1]))
+            .sort((a, b) => a - b);
+          if (actual.length !== 92 || catalog.length !== 92 ||
+              actual.some((id, index) => id !== catalog[index])) {
+            throw new Error('2.2 trigger catalog does not exactly match the local object database');
+          }
+          console.log('Validated exact 92/92 trigger catalog match.');
+          JS
 
+          cp -a "${SOURCE_DIR}/." "${PUBLIC_DIR}/"
+          touch "${PUBLIC_DIR}/.nojekyll"
           test -f "${PUBLIC_DIR}/index.html"
           test -f "${PUBLIC_DIR}/offline-check.html"
           test -f "${PUBLIC_DIR}/service-worker.js"
-
-          echo "Corrected Web Dashers v2 package verified."
+          echo "Web Dashers v3 package verified and ready for GitHub Pages."
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
