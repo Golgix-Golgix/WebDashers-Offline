@@ -7,29 +7,42 @@ on:
       - main
     paths:
       - '.github/workflows/deploy-pages.yml'
+
   release:
-    types: [published]
+    types:
+      - published
+
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Evita collisioni con altri workflow che utilizzano
+# il gruppo github-pages e non annulla i deploy in corso.
 concurrency:
-  group: github-pages
-  cancel-in-progress: true
+  group: webdashers-offline-pages
+  cancel-in-progress: false
 
 jobs:
+
+  # ==========================================
+  # BUILD: SCARICA E VERIFICA IL PACCHETTO
+  # ==========================================
+
   build:
     name: Build and upload Web Dashers
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
 
     steps:
+
       - name: Download and verify Web Dashers v3
         env:
           REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ github.event.release.tag_name || 'offline-2026-11-25-v3' }}
+
         run: |
           set -euo pipefail
 
@@ -39,27 +52,42 @@ jobs:
 
           ASSET_URL="https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}/WebDashers_Offline_Updated.zip"
 
+          echo "Downloading release: ${RELEASE_TAG}"
+
           curl --fail --location --retry 4 --retry-delay 2 \
             --output "${ZIP_PATH}" "${ASSET_URL}"
 
-          echo "fffa63e089afccb640629c1bcbd5bb8cad87ef7c2ba7148ce54ce0dc6d210359  ${ZIP_PATH}" | sha256sum --check --status
+          echo "Checking ZIP SHA-256..."
+
+          echo "fffa63e089afccb640629c1bcbd5bb8cad87ef7c2ba7148ce54ce0dc6d210359  ${ZIP_PATH}" \
+            | sha256sum --check
 
           mkdir -p "${EXTRACT_DIR}" "${PUBLIC_DIR}"
+
+          echo "Extracting package..."
 
           unzip -q "${ZIP_PATH}" -d "${EXTRACT_DIR}"
 
           SOURCE_DIR="${EXTRACT_DIR}/workdashers"
 
+          # Verify required files
           test -f "${SOURCE_DIR}/index.html"
           test -f "${SOURCE_DIR}/service-worker.js"
           test -f "${SOURCE_DIR}/offline-assets.json"
           test -f "${SOURCE_DIR}/offline-check.html"
           test -f "${SOURCE_DIR}/assets/levels/22.txt"
 
-          grep -Fq '2026-11-25-1' "${SOURCE_DIR}/service-worker.js"
-          grep -Fq '"version": "2026-11-25.1"' "${SOURCE_DIR}/offline-assets.json"
+          echo "Checking offline version..."
+
+          grep -Fq '2026-11-25-1' \
+            "${SOURCE_DIR}/service-worker.js"
+
+          grep -Fq '"version": "2026-11-25.1"' \
+            "${SOURCE_DIR}/offline-assets.json"
 
           cd "${SOURCE_DIR}"
+
+          echo "Running package validation..."
 
           python3 - <<'PY'
           import base64
@@ -70,18 +98,35 @@ jobs:
 
           root = Path('.')
 
+          # Check offline manifest
           manifest = json.loads(
-              (root / 'offline-assets.json').read_text(encoding='utf-8')
+              (root / 'offline-assets.json').read_text(
+                  encoding='utf-8'
+              )
           )
 
           assert manifest['version'] == '2026-11-25.1'
 
           files = manifest['files']
 
-          assert len(files) == 365
-          assert len(set(files)) == 365
-          assert all((root / p).is_file() for p in files)
+          assert len(files) == 365, (
+              f"Expected 365 offline files, found {len(files)}"
+          )
 
+          assert len(set(files)) == 365, (
+              "Duplicate paths detected in offline manifest"
+          )
+
+          missing = [
+              path for path in files
+              if not (root / path).is_file()
+          ]
+
+          assert not missing, (
+              f"Missing offline files: {missing[:10]}"
+          )
+
+          # Decode and verify the Dash level
           raw = (
               (root / 'assets/levels/22.txt')
               .read_text(encoding='utf-8')
@@ -96,12 +141,16 @@ jobs:
           ).decode('utf-8')
 
           objects = [
-              obj for obj in decoded.split(';')[1:]
+              obj
+              for obj in decoded.split(';')[1:]
               if obj
           ]
 
-          assert len(objects) == 18329
+          assert len(objects) == 18329, (
+              f"Unexpected Dash object count: {len(objects)}"
+          )
 
+          # Check trigger catalog
           trigger = (
               root / 'assets/scripts/core/triggers-v22.js'
           ).read_text(encoding='utf-8')
@@ -112,45 +161,70 @@ jobs:
               re.M
           )
 
-          assert len(ids) == 92
+          assert len(ids) == 92, (
+              f"Expected 92 trigger IDs, found {len(ids)}"
+          )
 
           handlers = re.findall(
               r'implemented: true',
               trigger
           )
 
-          assert len(handlers) == 2
+          assert len(handlers) == 2, (
+              f"Expected 2 implemented handlers, found {len(handlers)}"
+          )
 
-          print('Dash objects:', len(objects))
-          print('Trigger IDs:', len(ids))
-          print('Implemented handlers:', len(handlers))
-          print('Offline files:', len(files))
+          print("PACKAGE VALIDATION PASSED")
+          print("Dash objects:", len(objects))
+          print("Trigger IDs:", len(ids))
+          print("Implemented handlers:", len(handlers))
+          print("Offline files:", len(files))
           PY
+
+          echo "Preparing GitHub Pages directory..."
 
           cp -a "${SOURCE_DIR}/." "${PUBLIC_DIR}/"
 
+          # Preserve the no-Jekyll marker in the Pages artifact
           touch "${PUBLIC_DIR}/.nojekyll"
 
+          # Final output checks
           test -f "${PUBLIC_DIR}/index.html"
           test -f "${PUBLIC_DIR}/offline-check.html"
           test -f "${PUBLIC_DIR}/service-worker.js"
+          test -f "${PUBLIC_DIR}/.nojekyll"
 
           echo "Web Dashers build successfully verified."
 
+      # ======================================
+      # CONFIGURE GITHUB PAGES
+      # ======================================
+
       - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
+
+      # ======================================
+      # UPLOAD VERIFIED ARTIFACT
+      # ======================================
 
       - name: Upload GitHub Pages artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v5
+
         with:
           name: github-pages
           path: public
           retention-days: 1
           include-hidden-files: true
 
+  # ==========================================
+  # DEPLOY: PUBBLICA IL SITO
+  # ==========================================
+
   deploy:
     name: Deploy verified artifact
+
     needs: build
+
     runs-on: ubuntu-latest
 
     permissions:
@@ -162,6 +236,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
+
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
